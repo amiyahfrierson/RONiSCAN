@@ -1,3 +1,5 @@
 apt install -y ruby-full libpcap-dev
 gem update --system
 gem install bettercap
+
+got to be logged in as root
